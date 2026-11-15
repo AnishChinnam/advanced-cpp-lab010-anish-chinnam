@@ -4,6 +4,7 @@
 #include "project/hash_table.h"
 
 #include <algorithm>
+#include <map>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -116,4 +117,48 @@ TEST_CASE("HashTable handles many strings and negative values") {
     REQUIRE(table.get("minus-five") == -5);
     REQUIRE(table.get("big") == 123456);
     REQUIRE(table.get("another") == -999);
+}
+
+TEST_CASE("HashTable tombstones preserve real collision chains") {
+    HashTable table(17);
+    std::vector<std::string> colliding;
+    for (int i = 0; colliding.size() < 4; ++i) {
+        std::string key = "collision" + std::to_string(i);
+        std::size_t hash = 2166136261u;
+        for (unsigned char ch : key) { hash ^= ch; hash *= 16777619u; }
+        if (hash % 17 == 0) colliding.push_back(key);
+    }
+    for (int i = 0; i < 3; ++i) REQUIRE(table.insert(colliding[i], i));
+    REQUIRE(table.remove(colliding[0]));
+    REQUIRE(table.get(colliding[2]) == 2);
+    REQUIRE_FALSE(table.insert(colliding[2], 99));
+    REQUIRE(table.insert(colliding[3], 3));
+    REQUIRE(table.get(colliding[3]) == 3);
+    REQUIRE(table.size() == 3u);
+    REQUIRE_FALSE(table.remove(colliding[0]));
+    REQUIRE_THROWS_AS(table.get(colliding[0]), std::out_of_range);
+}
+
+TEST_CASE("HashTable small capacities and deletion cycles match a reference") {
+    for (std::size_t capacity : {1u, 2u, 4u, 8u}) {
+        HashTable table(capacity);
+        std::map<std::string, int> expected;
+        REQUIRE(table.insert("", -1));
+        expected[""] = -1;
+        for (int i = 0; i < 400; ++i) {
+            const auto key = "key" + std::to_string((i * 37) % 53);
+            switch (i % 3) {
+                case 0: REQUIRE(table.insert(key, i) == expected.emplace(key, i).second); break;
+                case 1: REQUIRE(table.remove(key) == (expected.erase(key) != 0)); break;
+                default:
+                    REQUIRE(table.update(key, -i) == (expected.count(key) != 0));
+                    if (expected.count(key)) expected[key] = -i;
+            }
+            REQUIRE(table.size() == expected.size());
+            for (const auto& entry : expected) REQUIRE(table.get(entry.first) == entry.second);
+            REQUIRE_FALSE(table.contains("absent"));
+        }
+        REQUIRE(table.keys().size() == expected.size());
+        REQUIRE(table.values().size() == expected.size());
+    }
 }

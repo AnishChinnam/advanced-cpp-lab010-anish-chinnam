@@ -9,9 +9,7 @@ HashTable::HashTable(std::size_t capacity)
     if (capacity == 0) {
         throw std::invalid_argument("Hash table capacity must be greater than zero");
     }
-    for (std::size_t i = 0; i < table_.size(); ++i) {
-        table_[i] = HashEntry();
-    }
+    table_.resize(nextPrime(capacity));
 }
 
 HashTable::~HashTable() = default;
@@ -26,42 +24,68 @@ std::size_t HashTable::hashFunction(const std::string& key) const {
 }
 
 std::size_t HashTable::probe(const std::string& key) const {
-    std::size_t index = hashFunction(key);
-    std::size_t original = index;
-    std::size_t step = 1;
-
-    while (table_[index].occupied && table_[index].key != key) {
-        index = (original + step * step) % table_.size();
-        ++step;
+    const std::size_t original = hashFunction(key);
+    std::size_t firstDeleted = table_.size();
+    // Tombstones preserve search paths; remember one but keep checking for duplicates.
+    for (std::size_t step = 0; step < table_.size(); ++step) {
+        const std::size_t index = (original + step * step) % table_.size();
+        const auto& entry = table_[index];
+        if (!entry.occupied) {
+            return firstDeleted == table_.size() ? index : firstDeleted;
+        }
+        if (!entry.deleted && entry.key == key) {
+            return index;
+        }
+        if (entry.deleted && firstDeleted == table_.size()) {
+            firstDeleted = index;
+        }
     }
-    return index;
+    return firstDeleted;
 }
 
 bool HashTable::insert(const std::string& key, int value) {
-    (void)key;
-    (void)value;
-    throw std::logic_error("Student implementation required: insert");
+    std::size_t index = probe(key);
+    if (index < table_.size() && table_[index].occupied && !table_[index].deleted) {
+        return false;
+    }
+    // Prime capacity and load below 1/2 guarantee space along a quadratic probe.
+    if (index == table_.size() || size_ + 1 > table_.size() / 2) {
+        rehash();
+        index = probe(key);
+    }
+    table_[index] = HashEntry(key, value, true, false);
+    ++size_;
+    return true;
 }
 
 bool HashTable::remove(const std::string& key) {
-    (void)key;
-    throw std::logic_error("Student implementation required: remove");
+    if (!contains(key)) {
+        return false;
+    }
+    table_[probe(key)].deleted = true;
+    --size_;
+    return true;
 }
 
 bool HashTable::contains(const std::string& key) const {
-    (void)key;
-    throw std::logic_error("Student implementation required: contains");
+    const std::size_t index = probe(key);
+    return index < table_.size() && table_[index].occupied && !table_[index].deleted
+        && table_[index].key == key;
 }
 
 int HashTable::get(const std::string& key) const {
-    (void)key;
-    throw std::logic_error("Student implementation required: get");
+    if (!contains(key)) {
+        throw std::out_of_range("Hash table key not found");
+    }
+    return table_[probe(key)].value;
 }
 
 bool HashTable::update(const std::string& key, int newValue) {
-    (void)key;
-    (void)newValue;
-    throw std::logic_error("Student implementation required: update");
+    if (!contains(key)) {
+        return false;
+    }
+    table_[probe(key)].value = newValue;
+    return true;
 }
 
 std::size_t HashTable::size() const noexcept {
@@ -101,7 +125,14 @@ std::vector<int> HashTable::values() const {
 }
 
 void HashTable::rehash() {
-    throw std::logic_error("Student implementation required: rehash");
+    HashTable replacement(nextPrime(table_.size() * 2));
+    for (const auto& entry : table_) {
+        if (entry.occupied && !entry.deleted) {
+            replacement.insert(entry.key, entry.value);
+        }
+    }
+    table_.swap(replacement.table_);
+    std::swap(size_, replacement.size_);
 }
 
 bool HashTable::isPrime(std::size_t value) const {
@@ -114,7 +145,7 @@ bool HashTable::isPrime(std::size_t value) const {
     if (value % 2 == 0) {
         return false;
     }
-    for (std::size_t i = 3; i * i <= value; i += 2) {
+    for (std::size_t i = 3; i <= value / i; i += 2) {
         if (value % i == 0) {
             return false;
         }
